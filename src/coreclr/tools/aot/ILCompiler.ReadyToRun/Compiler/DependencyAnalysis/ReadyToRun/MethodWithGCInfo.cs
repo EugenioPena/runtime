@@ -253,6 +253,10 @@ namespace ILCompiler.DependencyAnalysis.ReadyToRun
             {
                 dependencyList.Add(node, "classMustBeLoadedBeforeCodeIsRun");
             }
+            if (_methodColdCodeNode != null)
+            {
+                dependencyList.Add(_methodColdCodeNode, "cold");
+            }
 
             return dependencyList;
         }

@@ -11,7 +11,13 @@ namespace CoreLab
     {
         private static void Main(string[] args)
         {
-            System.Convert.FromHexString(null);
+            try
+            {
+                System.Convert.FromHexString(null);
+            }
+            catch (Exception)
+            {
+            }
         }
     }
 }

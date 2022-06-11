@@ -6040,6 +6040,10 @@ PCODE ReadyToRunJitManager::GetCodeAddressForRelOffset(const METHODTOKEN& Method
     return methodRegionInfo.coldStartAddress + coldOffset;
 }
 
+void andrew_break()
+{
+}
+
 BOOL ReadyToRunJitManager::JitCodeToMethodInfo(RangeSection * pRangeSection,
                                             PCODE currentPC,
                                             MethodDesc** ppMethodDesc,
@@ -6088,11 +6092,21 @@ BOOL ReadyToRunJitManager::JitCodeToMethodInfo(RangeSection * pRangeSection,
 #ifdef FEATURE_EH_FUNCLETS
     // Save the raw entry
     PTR_RUNTIME_FUNCTION RawFunctionEntry = pRuntimeFunctions + MethodIndex;
-    //
-    // AndrewAu - (N) This is wrong if we have hot-cold splitting
-    //                At this point, we have a method index of the cold code
-    //                And we need to get back to the entry point
-    //
+
+    // If the MethodIndex happen to be the cold code block, turn it into the associated hot code block
+    for (DWORD i = 0; i < pInfo->m_nScratch; i++)
+    {
+        if ((ULONG)MethodIndex == pInfo->m_pScratch[i])
+        {
+            if (i % 2 == 0)
+            {
+                andrew_break();
+                MethodIndex = pInfo->m_pScratch[i + 1];
+                break;
+            }
+        }
+    }
+
     MethodDesc *pMethodDesc;
     while ((pMethodDesc = pInfo->GetMethodDescForEntryPoint(ImageBase + RUNTIME_FUNCTION__BeginAddress(pRuntimeFunctions + MethodIndex))) == NULL)
         MethodIndex--;
@@ -6170,16 +6184,43 @@ DWORD ReadyToRunJitManager::GetFuncletStartOffsets(const METHODTOKEN& MethodToke
     // of the first hot funclet, because GetFuncletStartOffsetsHelper() will skip all the function
     // fragments until the first funclet, if any, is found.
 
-    //
-    // AndrewAu - (N) Once we have the cold code start address and size computed by JitTokenToMethodRegionInfo
-    //                This will need to change such that we enumerate the funclets in the cold code as well.
-    //
+    // If we ever want to support cold funclets, update here to enumerate the funclets in cold code
 
     GetFuncletStartOffsetsHelper(regionInfo.hotStartAddress, regionInfo.hotSize, 0,
         pFirstFuncletFunctionEntry, moduleBase,
         &nFunclets, pStartFuncletOffsets, dwLength);
 
     return nFunclets;
+}
+
+BOOL ReadyToRunJitManager::IsFunclet(EECodeInfo* pCodeInfo)
+{
+    CONTRACTL {
+        NOTHROW;
+        GC_NOTRIGGER;
+        HOST_NOCALLS;
+        SUPPORTS_DAC;
+    } CONTRACTL_END;
+
+    andrew_break();
+
+    ReadyToRunInfo * pInfo = JitTokenToReadyToRunInfo(pCodeInfo->GetMethodToken());
+
+    COUNT_T nRuntimeFunctions = pInfo->m_nRuntimeFunctions;
+    PTR_RUNTIME_FUNCTION pRuntimeFunctions = pInfo->m_pRuntimeFunctions;
+
+    ULONG methodIndex = (ULONG)(pCodeInfo->GetFunctionEntry() - pRuntimeFunctions);
+
+    // If it is either the main hot-code or the cold code, then it is not a funclet
+    for (DWORD i = 0; i < pInfo->m_nScratch; i++)
+    {
+        if (methodIndex == pInfo->m_pScratch[i])
+        {
+            return FALSE;
+        }
+    }
+
+    return TRUE;
 }
 
 BOOL ReadyToRunJitManager::IsFilterFunclet(EECodeInfo * pCodeInfo)
@@ -6232,6 +6273,8 @@ void ReadyToRunJitManager::JitTokenToMethodRegionInfo(const METHODTOKEN& MethodT
         SUPPORTS_DAC;
         PRECONDITION(methodRegionInfo != NULL);
     } CONTRACTL_END;
+
+    _ASSERTE(FALSE);
 
     //
     // AndrewAu - (N) This is obviously wrong if we have hot-cold splitting

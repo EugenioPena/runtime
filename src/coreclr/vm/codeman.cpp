@@ -6220,7 +6220,13 @@ BOOL ReadyToRunJitManager::IsFunclet(EECodeInfo* pCodeInfo)
         }
     }
 
-    return TRUE;
+    // It could be a funclet, or it could be a function that is not split
+    // so fall back to existing logic
+
+    TADDR funcletStartAddress = GetFuncletStartAddress(pCodeInfo);
+    TADDR methodStartAddress = pCodeInfo->GetStartAddress();
+
+    return (funcletStartAddress != methodStartAddress);
 }
 
 BOOL ReadyToRunJitManager::IsFilterFunclet(EECodeInfo * pCodeInfo)
@@ -6274,29 +6280,31 @@ void ReadyToRunJitManager::JitTokenToMethodRegionInfo(const METHODTOKEN& MethodT
         PRECONDITION(methodRegionInfo != NULL);
     } CONTRACTL_END;
 
-    _ASSERTE(FALSE);
-
-    //
-    // AndrewAu - (N) This is obviously wrong if we have hot-cold splitting
-    //
-    //                Given a JitToken, we can access:
-    //                - StartAddress
-    //                - ReadyToRunInfo
-    //                - ModuleBase
-    //                - UnwindInfo
-    //                - GCInfo
-    //
-    //                Nothing seems to give out the cold code size
-    //                We do need an additional data to get that info
-    //
-    //                Cheating a bit - it appears the implementation of fragile
-    //                NGen involves binary searching some additional data
-    //                We might want to follow a similar approach there
-    //
     methodRegionInfo->hotStartAddress  = JitTokenToStartAddress(MethodToken);
     methodRegionInfo->hotSize          = GetCodeManager()->GetFunctionSize(GetGCInfoToken(MethodToken));
     methodRegionInfo->coldStartAddress = 0;
     methodRegionInfo->coldSize         = 0;
+
+    ReadyToRunInfo * pInfo = JitTokenToReadyToRunInfo(MethodToken);
+    COUNT_T nRuntimeFunctions = pInfo->m_nRuntimeFunctions;
+    PTR_RUNTIME_FUNCTION pRuntimeFunctions = pInfo->m_pRuntimeFunctions;
+
+    PTR_RUNTIME_FUNCTION pRuntimeFunction = dac_cast<PTR_RUNTIME_FUNCTION>(MethodToken.m_pCodeHeader);
+
+    ULONG methodIndex = (ULONG)(pRuntimeFunction - pRuntimeFunctions);
+
+    for (DWORD i = 0; i < pInfo->m_nScratch; i++)
+    {
+        if (methodIndex == pInfo->m_pScratch[i])
+        {
+            _ASSERTE((i % 2) == 1);
+            ULONG coldMethodIndex = pInfo->m_pScratch[i - 1];
+            PTR_RUNTIME_FUNCTION pColdRuntimeFunction = pRuntimeFunctions + coldMethodIndex;
+            methodRegionInfo->coldStartAddress = RUNTIME_FUNCTION__BeginAddress(pColdRuntimeFunction);
+            methodRegionInfo->coldSize         = RUNTIME_FUNCTION__EndAddress(pColdRuntimeFunction, 0) - methodRegionInfo->coldStartAddress;
+            break;
+        }
+    }
 }
 
 #ifdef DACCESS_COMPILE

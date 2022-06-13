@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Reflection.Metadata.Ecma335;
 using Internal.JitInterface;
 using Internal.Text;
@@ -137,6 +138,21 @@ namespace ILCompiler.DependencyAnalysis.ReadyToRun
         public byte[] GetFixupBlob(NodeFactory factory)
         {
             Relocation[] relocations = GetData(factory, relocsOnly: true).Relocs;
+
+#if READYTORUN
+            if (_methodColdCodeNode != null)
+            {
+                Relocation[] coldRelocations = _methodColdCodeNode.GetData(factory, relocsOnly: true).Relocs;
+                if (relocations == null)
+                {
+                    relocations = coldRelocations;
+                }
+                else if (coldRelocations != null)
+                {
+                    relocations = Enumerable.Concat(relocations, coldRelocations).ToArray();
+                }
+            }
+#endif
 
             if (relocations == null)
             {

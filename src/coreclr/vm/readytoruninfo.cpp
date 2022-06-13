@@ -650,7 +650,7 @@ ReadyToRunInfo::ReadyToRunInfo(Module * pModule, LoaderAllocator* pLoaderAllocat
     if (pScratchDir != NULL)
     {
         m_pScratch = (PTR_ULONG)m_pComposite->GetLayout()->GetDirectoryData(pScratchDir);
-        m_nScratch = pScratchDir->Size;
+        m_nScratch = pScratchDir->Size / sizeof(ULONG);
     }
     else
     {

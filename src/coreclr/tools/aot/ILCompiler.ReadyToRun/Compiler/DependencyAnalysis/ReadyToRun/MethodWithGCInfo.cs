@@ -4,7 +4,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-
+using System.Linq;
+using System.Reflection.Metadata.Ecma335;
 using Internal.JitInterface;
 using Internal.Text;
 using Internal.TypeSystem;
@@ -19,6 +20,9 @@ namespace ILCompiler.DependencyAnalysis.ReadyToRun
         private readonly MethodDesc _method;
 
         private ObjectData _methodCode;
+#if READYTORUN
+        private MethodColdCodeNode _methodColdCodeNode;
+#endif
         private FrameInfo[] _frameInfos;
         private byte[] _gcInfo;
         private ObjectData _ehInfo;
@@ -129,10 +133,26 @@ namespace ILCompiler.DependencyAnalysis.ReadyToRun
             }
         }
 
+        public MethodColdCodeNode GetColdCodeNode() => _methodColdCodeNode;
 
         public byte[] GetFixupBlob(NodeFactory factory)
         {
             Relocation[] relocations = GetData(factory, relocsOnly: true).Relocs;
+
+#if READYTORUN
+            if (_methodColdCodeNode != null)
+            {
+                Relocation[] coldRelocations = _methodColdCodeNode.GetData(factory, relocsOnly: true).Relocs;
+                if (relocations == null)
+                {
+                    relocations = coldRelocations;
+                }
+                else if (coldRelocations != null)
+                {
+                    relocations = Enumerable.Concat(relocations, coldRelocations).ToArray();
+                }
+            }
+#endif
 
             if (relocations == null)
             {
@@ -249,6 +269,10 @@ namespace ILCompiler.DependencyAnalysis.ReadyToRun
             {
                 dependencyList.Add(node, "classMustBeLoadedBeforeCodeIsRun");
             }
+            if (_methodColdCodeNode != null)
+            {
+                dependencyList.Add(_methodColdCodeNode, "cold");
+            }
 
             return dependencyList;
         }
@@ -358,5 +382,12 @@ namespace ILCompiler.DependencyAnalysis.ReadyToRun
         public override bool ShouldSkipEmittingObjectNode(NodeFactory factory) => IsEmpty;
 
         public override string ToString() => _method.ToString();
+
+#if READYTORUN
+        public void SetColdCodeNode(MethodColdCodeNode methodColdCodeNode)
+        {
+            _methodColdCodeNode = methodColdCodeNode;
+        }
+#endif
     }
 }

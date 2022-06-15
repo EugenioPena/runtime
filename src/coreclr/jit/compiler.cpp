@@ -2686,6 +2686,19 @@ void Compiler::compInitOptions(JitFlags* jitFlags)
         }
     }
 
+    // Uncomment this to show the method full name 
+    // printf("%s\n", info.compFullName);
+
+    // Also note that we might run into this code when a method is
+    // *being* inlined.
+
+    if (opts.IsReadyToRun() && strcmp("", info.compFullName) == 0)
+    {
+        // This will cause the compiler to spill a lot of debug logs
+        // In various places, we can condition on this variable and call AndrewBreak()
+        verboseDump = true;
+    }
+
     if (verboseDump)
     {
         verbose = true;

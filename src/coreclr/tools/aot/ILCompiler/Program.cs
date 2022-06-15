@@ -58,7 +58,8 @@ namespace ILCompiler
         private bool _reflectedOnly;
         private bool _scanReflection;
         private bool _methodBodyFolding;
-        private int _parallelism = Environment.ProcessorCount;
+        // Disable parallelism to make debugging easier
+        private int _parallelism = 1;
         private string _instructionSet;
         private string _guard;
         private int _maxGenericCycle = CompilerTypeSystemContext.DefaultGenericCycleCutoffPoint;

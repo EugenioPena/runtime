@@ -335,7 +335,7 @@ namespace R2RDump
             }
 
             bool haveQuery = false;
-            if (_options.Section.Length > 0)
+            if (_options.Section != null && _options.Section.Length > 0)
             {
                 haveQuery = true;
                 QuerySection(r2r, _options.Section);
@@ -359,6 +359,7 @@ namespace R2RDump
                 QueryMethod(r2r, "R2R Methods by Keyword", _options.Keyword, false);
             }
 
+            haveQuery = false;   
             if (!haveQuery)
             {
                 // Dump all sections and methods if no queries specified
@@ -631,11 +632,23 @@ namespace R2RDump
         // Command line parsing
         //
 
-        public static int Main(string[] args) =>
-            new CommandLineBuilder(new R2RDumpRootCommand())
+        public static int Main(string[] args)
+        {
+/*
+            //
+            // AndrewAu - A convenient way to make sure I have time 
+            // to attach a debugger on startup
+            //
+            while (!System.Diagnostics.Debugger.IsAttached)
+            {
+            }
+            System.Diagnostics.Debugger.Break();
+*/
+            return new CommandLineBuilder(new R2RDumpRootCommand())
                     .UseHelp()
                     .UseParseErrorReporting()
                     .Build()
                     .Invoke(args);
+        }
     }
 }

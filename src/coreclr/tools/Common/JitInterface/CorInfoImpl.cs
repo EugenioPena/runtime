@@ -30,10 +30,68 @@ using Internal.IL.Stubs;
 #if READYTORUN
 using System.Reflection.Metadata.Ecma335;
 using ILCompiler.DependencyAnalysis.ReadyToRun;
+using Internal.Text;
 #endif
 
 namespace Internal.JitInterface
 {
+#if READYTORUN
+    public class MethodColdCodeNode : ObjectNode, ISymbolDefinitionNode
+    {
+        private ObjectData _methodColdCode;
+        private MethodDesc _owningMethod;
+
+        public MethodColdCodeNode(MethodDesc owningMethod)
+        {
+            _owningMethod = owningMethod;
+        }
+
+        public int Offset => 0;
+
+        public override ObjectNodeSection Section
+        {
+            get
+            {
+                // TODO, Unix
+                return ObjectNodeSection.ManagedCodeWindowsContentSection;
+            }
+        }
+
+        public override bool IsShareable => false;
+
+        // This ClassCode must be larger than that of MethodCodeNode to ensure it got sorted at the end of the code
+        public override int ClassCode => 788492408;
+
+        public override bool StaticDependenciesAreComputed => _methodColdCode != null;
+
+        public void AppendMangledName(NameMangler nameMangler, Utf8StringBuilder sb)
+        {
+            sb.Append("__coldcode_" + nameMangler.GetMangledMethodName(_owningMethod));
+        }
+
+        public override int CompareToImpl(ISortableNode other, CompilerComparer comparer)
+        {
+            MethodColdCodeNode otherNode = (MethodColdCodeNode)other;
+            return comparer.Compare(_owningMethod, otherNode._owningMethod);
+        }
+
+        public override ObjectData GetData(NodeFactory factory, bool relocsOnly = false) => _methodColdCode;
+
+        protected override string GetName(NodeFactory context) => throw new NotImplementedException();
+
+        public void SetCode(ObjectData data)
+        {
+            Debug.Assert(_methodColdCode == null);
+            _methodColdCode = data;
+        }
+
+        public int GetColdCodeSize()
+        {
+            return _methodColdCode.Data.Length;
+        }
+    }
+#endif
+
     internal sealed unsafe partial class CorInfoImpl
     {
         //
@@ -371,6 +429,10 @@ namespace Internal.JitInterface
             {
                 if (_compilation.TypeSystemContext.Target.Architecture != TargetArchitecture.ARM64)
                 {
+                    //
+                    // AndrewAu - (?) looks like we have something to do here.
+                    //
+
                     // For xarch/arm32, the generated code is sometimes smaller than the memory allocated.
                     // In that case, trim the codeBlock to the actual value.
                     //
@@ -422,6 +484,20 @@ namespace Internal.JitInterface
                 , isFoldable: (_compilation._compilationOptions & RyuJitCompilationOptions.MethodBodyFolding) != 0
 #endif
                 );
+#if READYTORUN
+            if (_methodColdCodeNode != null)
+            {
+                // TODO, Study how this work.
+                var relocs2 = _coldCodeRelocs.ToArray();
+                Array.Sort(relocs2, (x, y) => (x.Offset - y.Offset));
+                var coldObjectData = new ObjectNode.ObjectData(_coldCode,
+                    relocs2,
+                    alignment,
+                    new ISymbolDefinitionNode[] { _methodColdCodeNode });
+                _methodColdCodeNode.SetCode(coldObjectData);
+                _methodCodeNode.SetColdCodeNode(_methodColdCodeNode);
+            }
+#endif
 
             _methodCodeNode.InitializeFrameInfos(_frameInfos);
             _methodCodeNode.InitializeDebugEHClauseInfos(debugEHClauseInfos);
@@ -563,7 +639,10 @@ namespace Internal.JitInterface
             }
 
             _methodCodeNode = null;
-
+#if READYTORUN
+            // AndrewAu - (3) - looks like the right thing to do after (2)
+            _methodColdCodeNode = null;
+#endif
             _code = null;
             _coldCode = null;
 
@@ -572,7 +651,9 @@ namespace Internal.JitInterface
 
             _codeRelocs = new ArrayBuilder<Relocation>();
             _roDataRelocs = new ArrayBuilder<Relocation>();
-
+#if READYTORUN
+            _coldCodeRelocs = new ArrayBuilder<Relocation>();
+#endif
             _numFrameInfos = 0;
             _usedFrameInfos = 0;
             _frameInfos = null;
@@ -3396,6 +3477,10 @@ namespace Internal.JitInterface
 
             if (args.coldCodeSize != 0)
             {
+
+#if READYTORUN
+                this._methodColdCodeNode = new MethodColdCodeNode(MethodBeingCompiled);
+#endif
                 args.coldCodeBlock = (void*)GetPin(_coldCode = new byte[args.coldCodeSize]);
                 args.coldCodeBlockRW = args.coldCodeBlock;
             }
@@ -3443,7 +3528,10 @@ namespace Internal.JitInterface
 
         private void reserveUnwindInfo(bool isFunclet, bool isColdCode, uint unwindSize)
         {
-            _numFrameInfos++;
+            if (!isColdCode)
+            {
+                _numFrameInfos++;
+            }
         }
 
         private void allocUnwindInfo(byte* pHotCode, byte* pColdCode, uint startOffset, uint endOffset, uint unwindSize, byte* pUnwindBlock, CorJitFuncKind funcKind)
@@ -3475,7 +3563,10 @@ namespace Internal.JitInterface
             }
 #endif
 
-            _frameInfos[_usedFrameInfos++] = new FrameInfo(flags, (int)startOffset, (int)endOffset, blobData);
+            if (blobData.Length > 0)
+            {
+                _frameInfos[_usedFrameInfos++] = new FrameInfo(flags, (int)startOffset, (int)endOffset, blobData);
+            }
         }
 
         private void* allocGCInfo(UIntPtr size)
@@ -3510,7 +3601,9 @@ namespace Internal.JitInterface
 
         private ArrayBuilder<Relocation> _codeRelocs;
         private ArrayBuilder<Relocation> _roDataRelocs;
-
+#if READYTORUN
+        private ArrayBuilder<Relocation> _coldCodeRelocs;
+#endif
 
         /// <summary>
         /// Various type of block.
@@ -3588,6 +3681,11 @@ namespace Internal.JitInterface
                 case BlockType.ROData:
                     length = _roData.Length;
                     return ref _roDataRelocs;
+#if READYTORUN
+                case BlockType.ColdCode:
+                    length = _coldCode.Length;
+                    return ref _coldCodeRelocs;
+#endif
                 default:
                     throw new NotImplementedException("Arbitrary relocs");
             }
@@ -3640,8 +3738,19 @@ namespace Internal.JitInterface
                     break;
 
                 case BlockType.ColdCode:
-                    // TODO: Arbitrary relocs
+#if READYTORUN
+                    // AndrewAu - (2) Once I switched on hot cold splitting on the JIT side
+                    //                crossgen2 will immediately run into this exception (before change)
+                    //
+                    //                Glancing on the code before and after this switch case, it seems
+                    //                obvious that we need a _methodColdCodeNode, so that's what I did.
+                    //
+                    Debug.Assert(_methodColdCodeNode != null);
+                    relocTarget = _methodColdCodeNode;
+                    break;
+#else
                     throw new NotImplementedException("ColdCode relocs");
+#endif
 
                 case BlockType.ROData:
                     relocTarget = _roDataBlob;

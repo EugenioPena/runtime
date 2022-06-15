@@ -787,7 +787,7 @@ public:
 
     virtual DWORD GetFuncletStartOffsets(const METHODTOKEN& MethodToken, DWORD* pStartFuncletOffsets, DWORD dwLength) = 0;
 
-    BOOL IsFunclet(EECodeInfo * pCodeInfo);
+    virtual BOOL IsFunclet(EECodeInfo * pCodeInfo);
     virtual BOOL IsFilterFunclet(EECodeInfo * pCodeInfo);
 #endif // FEATURE_EH_FUNCLETS
 
@@ -1503,6 +1503,66 @@ public:
 
 #ifdef FEATURE_READYTORUN
 
+//
+// AndrewAu - (N) Given the requirements I discovered in codeman.cpp,
+//
+//                I suggest this data structure:
+//
+//                For a given MethodIndex, it might be
+//                - The first hot code runtime function of a non-split function
+//                - The first hot code runtime function of a split function
+//                - The first cold code runtime function of a split function
+//                - Neither
+//
+//                For the first case, we associate the method index of it to -1
+//
+//                For the second case, we associate the method index of 
+//                it to the method index of the first cold code runtime function method index
+//
+//                For the third case, we associate the method index of 
+//                it to the method index of the first hot code runtime function method index
+//
+//                For others, we don't have a record
+//
+//                At the end, we add a -1 sentinel.
+//
+//                The records are sorted so we can use binary search.
+//
+//                To satisfy the methodRegionInfo query, we can check if the method index 
+//                has a cold code entry. 
+//
+//                If there isn't a cold code entry associated, we are done.
+//
+//                If there is a cold code entry, get the next entry, of that cold entry. It can either
+//                be the cold code entry of the next function, or a sentinel.
+//
+//                In either case, we know the method index of the last runtime function in the cold code.
+//                Using the RUNTIME_FUNCTION__BeginAddress of the first cold block and the 
+//                Using the RUNTIME_FUNCTION__EndAddress of the last cold block, we can determine 
+//                the cold code start and size, and we are done.
+//
+//                To satisfy the entry point query, find the entry associated with method index
+//
+//                This can be one of the three cases, in each case, we can get to the MethodDesc fast
+//
+//                - Case 1, it is a method entry point with no cold code, we can tell because its entry 
+//                          is pointing to -1, in that case just get the MethodDesc
+//                - Case 2, it is a method entry point with cold code, we can tell because its entry 
+//                          is pointing to a larger number, in that case get the MethodDesc
+//                - Case 3, it is the first cold code runtime function, we can tell because it entry
+//                          is pointing to a smaller number, in that case get the MethodDesc of its entry.
+//
+//                This design assumes:
+//
+//                - MethodIndex are small compared to addresses, prefer storing indexes to addresses.
+//                - A single structure for both queries is better than two for each.
+//
+//                Time Complexity  - it is likely to be dominated by the binary search to get to the entry.  O(log (#runtime functions))
+//                Space Complexity - we need to store at most four integers per method.
+//
+//                There might be a way to exploit that we only have a handful number of funclets. Right now, we are incurring the
+//                binary search for entry for both queries. I don't know how yet.
+//
 class ReadyToRunJitManager final: public IJitManager
 {
     VPTR_VTABLE_CLASS(ReadyToRunJitManager, IJitManager)
@@ -1559,6 +1619,7 @@ public:
 
     virtual TADDR                   GetFuncletStartAddress(EECodeInfo * pCodeInfo);
     virtual DWORD                   GetFuncletStartOffsets(const METHODTOKEN& MethodToken, DWORD* pStartFuncletOffsets, DWORD dwLength);
+    virtual BOOL                    IsFunclet(EECodeInfo * pCodeInfo);
     virtual BOOL                    IsFilterFunclet(EECodeInfo * pCodeInfo);
 #endif // FEATURE_EH_FUNCLETS
 
@@ -1567,7 +1628,7 @@ public:
 #if defined(DACCESS_COMPILE)
     virtual void EnumMemoryRegions(CLRDataEnumMemoryFlags flags);
     virtual void EnumMemoryRegionsForMethodDebugInfo(CLRDataEnumMemoryFlags flags, MethodDesc * pMD);
-#if defined(FEATURE_EH_FUNCLETS)
+#if defined(FEATURE_EH_FUNCLETS)    
     // Enumerate the memory necessary to retrieve the unwind info for a specific method
     virtual void EnumMemoryRegionsForMethodUnwindInfo(CLRDataEnumMemoryFlags flags, EECodeInfo * pCodeInfo);
 #endif //FEATURE_EH_FUNCLETS

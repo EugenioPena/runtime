@@ -11,6 +11,40 @@ using Debug = System.Diagnostics.Debug;
 
 namespace ILCompiler.DependencyAnalysis.ReadyToRun
 {
+    public class ScratchNode : HeaderTableNode
+    {
+        public uint[] mapping;
+
+        public ScratchNode(NodeFactory nodeFactory)
+            : base(nodeFactory.Target)
+        {
+            // _nodeFactory = nodeFactory;
+        }
+
+        public override int ClassCode => 29863035;
+
+        public override void AppendMangledName(NameMangler nameMangler, Utf8StringBuilder sb)
+        {
+            sb.Append(nameMangler.CompilationUnitPrefix);
+            sb.Append("__Scratch");
+        }
+
+        public override ObjectData GetData(NodeFactory factory, bool relocsOnly = false)
+        {
+            // This node does not trigger generation of other nodes.
+            if (relocsOnly)
+                return new ObjectData(Array.Empty<byte>(), Array.Empty<Relocation>(), 1, new ISymbolDefinitionNode[] { this });
+
+            ObjectDataBuilder builder = new ObjectDataBuilder(factory, relocsOnly);
+            builder.AddSymbol(this);
+            foreach (uint m in this.mapping)
+            {
+                builder.EmitUInt(m);
+            }
+            return builder.ToObjectData();
+        }
+    }
+
     public class RuntimeFunctionsTableNode : HeaderTableNode
     {
         private List<MethodWithGCInfo> _methodNodes;
@@ -59,7 +93,7 @@ namespace ILCompiler.DependencyAnalysis.ReadyToRun
 
         public override ObjectData GetData(NodeFactory factory, bool relocsOnly = false)
         {
-            // This node does not trigger generation of other nodes.
+            // TODO: Actually, it does, but how
             if (relocsOnly)
                 return new ObjectData(Array.Empty<byte>(), Array.Empty<Relocation>(), 1, new ISymbolDefinitionNode[] { this });
 
@@ -72,6 +106,7 @@ namespace ILCompiler.DependencyAnalysis.ReadyToRun
             // Add the symbol representing this object node
             runtimeFunctionsBuilder.AddSymbol(this);
 
+            uint runtimeFunctionIndex = 0;
             foreach (MethodWithGCInfo method in _methodNodes)
             {
                 int[] funcletOffsets = method.GCInfoNode.CalculateFuncletOffsets(factory);
@@ -94,8 +129,42 @@ namespace ILCompiler.DependencyAnalysis.ReadyToRun
                         runtimeFunctionsBuilder.EmitReloc(method, RelocType.IMAGE_REL_BASED_ADDR32NB, delta: frameInfo.EndOffset);
                     }
                     runtimeFunctionsBuilder.EmitReloc(factory.RuntimeFunctionsGCInfo.StartSymbol, RelocType.IMAGE_REL_BASED_ADDR32NB, funcletOffsets[frameIndex]);
+                    runtimeFunctionIndex++;
                 }
             }
+
+            List<uint> mapping = new List<uint>();
+#if READYTORUN
+            // Emitting a RuntimeFunction entry for cold code
+            foreach (MethodWithGCInfo method in _methodNodes)
+            {
+                // TODO: Proper namespace?
+                Internal.JitInterface.MethodColdCodeNode methodColdCodeNode = method.GetColdCodeNode();
+                if (methodColdCodeNode != null)
+                {
+                    int[] funcletOffsets = method.GCInfoNode.CalculateFuncletOffsets(factory);
+                    // TODO: Avoid code duplication
+                    // StartOffset of the runtime function
+                    int codeDelta = 0;
+                    if (Target.Architecture == TargetArchitecture.ARM)
+                    {
+                        // THUMB_CODE
+                        codeDelta = 1;
+                    }
+                    runtimeFunctionsBuilder.EmitReloc(methodColdCodeNode, RelocType.IMAGE_REL_BASED_ADDR32NB, delta: codeDelta);
+                    if (!relocsOnly && Target.Architecture == TargetArchitecture.X64)
+                    {
+                        // On Amd64, the 2nd word contains the EndOffset of the runtime function
+                        runtimeFunctionsBuilder.EmitReloc(methodColdCodeNode, RelocType.IMAGE_REL_BASED_ADDR32NB, delta: methodColdCodeNode.GetColdCodeSize());
+                    }
+                    runtimeFunctionsBuilder.EmitReloc(factory.RuntimeFunctionsGCInfo.StartSymbol, RelocType.IMAGE_REL_BASED_ADDR32NB, funcletOffsets[funcletOffsets.Length - 1]);
+                    mapping.Add(runtimeFunctionIndex);
+                    mapping.Add((uint)_insertedMethodNodes[method]);
+                    runtimeFunctionIndex++;
+                }
+            }
+#endif
+            _nodeFactory.Scratch.mapping = mapping.ToArray();
 
             // Emit sentinel entry
             runtimeFunctionsBuilder.EmitUInt(~0u);
